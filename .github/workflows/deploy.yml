@@ -1,0 +1,71 @@
+name: Deploy Monorepo to AWS
+
+on:
+  push:
+    branches:
+      - main  # deploy on push to main
+
+jobs:
+  deploy:
+    name: Build, Push Docker & Deploy with Terraform
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ap-south-1
+      ECR_REPOSITORY: monorepo-app
+      TERRAFORM_DIR: terraform
+
+    steps:
+      # Step 1: Checkout repo
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Step 2: Configure AWS credentials
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 3: Log in to ECR
+      - name: Login to Amazon ECR
+        id: ecr-login
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      # Step 4: Build Docker image
+      - name: Build Docker Image
+        run: |
+          docker build -t $ECR_REPOSITORY .
+
+      # Step 5: Tag Docker image for ECR
+      - name: Tag Docker Image
+        run: |
+          docker tag $ECR_REPOSITORY:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+
+      # Step 6: Push Docker image to ECR
+      - name: Push Docker Image to ECR
+        run: |
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest
+
+      # Step 7: Setup Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+
+      # Step 8: Terraform Init
+      - name: Terraform Init
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform init
+
+      # Step 9: Terraform Plan
+      - name: Terraform Plan
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform plan -var="docker_image=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:latest" -out=tfplan
+
+      # Step 10: Terraform Apply
+      - name: Terraform Apply
+        working-directory: ${{ env.TERRAFORM_DIR }}
+        run: terraform apply -auto-approve tfplan
